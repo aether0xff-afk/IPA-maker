@@ -1,0 +1,12 @@
+name: Build original source 1.0.1
+
+on:
+  push:
+    branches: [v1.0.1-original-source]
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: macos-15
+    steps:
+      - run: echo preparing original source build
