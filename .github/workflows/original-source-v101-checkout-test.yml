@@ -1,0 +1,27 @@
+name: Original source checkout test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout IPA maker branch
+        uses: actions/checkout@v4
+        with:
+          ref: v1.0.1-original-source
+
+      - name: Checkout archived original source
+        uses: actions/checkout@v4
+        with:
+          repository: aether0xff-afk/Hitomi-Downloader-Archived
+          ref: 6a873114c64106a5b45c39fcb3a1170d14a33589
+          path: source
+          token: ${{ secrets.GH_PAT || secrets.PAT || secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          persist-credentials: false
+
+      - run: find source/src/extractor -name '*.py' | wc -l
