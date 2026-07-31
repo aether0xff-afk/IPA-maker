@@ -1,8 +1,8 @@
-name: Build unsigned IPA
+name: Build Hitomi Swift 1.0 IPA
 
 on:
   push:
-    branches: [main]
+    branches: [main, v1.0]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -13,49 +13,62 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore bundled source
+      - name: Restore v1.0 source
         run: python3 bootstrap_source.py
 
       - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
           xcodebuild -version
+          swift --version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: brew install xcodegen autoconf automake libtool pkg-config
 
       - name: Validate source files
-        run: ./Scripts/validate_project.sh
+        run: |
+          chmod +x Scripts/*.sh
+          ./Scripts/validate_project.sh
 
-      - name: Build unsigned IPA
+      - name: Build full unsigned IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./Scripts/build_unsigned_ipa.sh
 
-      - name: Inspect IPA
+      - name: Verify full runtime payload
         run: |
-          unzip -l build-unsigned/HitomiSwiftFull-unsigned.ipa | head -80
-          shasum -a 256 build-unsigned/HitomiSwiftFull-unsigned.ipa
+          IPA=build-unsigned/HitomiSwiftFull-unsigned.ipa
+          unzip -t "$IPA"
+          unzip -l "$IPA" | head -160
+          unzip -l "$IPA" | grep 'original_pyc.zip'
+          unzip -l "$IPA" | grep 'Python.framework/Python'
+          unzip -l "$IPA" | grep 'LibtorrentNative.framework/LibtorrentNative'
+          unzip -l "$IPA" | grep 'openssl.framework/openssl'
+          shasum -a 256 "$IPA"
 
-      - name: Upload IPA
+      - name: Upload v1.0 IPA
         uses: actions/upload-artifact@v4
         with:
-          name: HitomiSwiftFull-unsigned-ipa
+          name: HitomiSwiftFull-v1.0-unsigned-ipa
           path: build-unsigned/HitomiSwiftFull-unsigned.ipa
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: HitomiSwiftFull-build-diagnostics
+          name: HitomiSwiftFull-v1.0-build-diagnostics
           path: |
             build-unsigned
             HitomiSwiftFull.xcodeproj
+            .runtime-cache
+            Runtime
           if-no-files-found: ignore
           retention-days: 7
