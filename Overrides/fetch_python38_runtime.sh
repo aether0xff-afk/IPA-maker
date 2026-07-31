@@ -65,6 +65,9 @@ while IFS= read -r -d '' framework; do
 done < <(find "$EXTRACT" -type d -name '*.xcframework' -print0)
 
 PYHOME="$(find "$EXTRACT" -type d -path '*/lib/python3.8' -print -quit)"
+if [[ -z "$PYHOME" && -d "$EXTRACT/python-stdlib" ]]; then
+  PYHOME="$EXTRACT/python-stdlib"
+fi
 if [[ -z "$PYHOME" ]]; then
   echo "Python 3.8 standard library not found in support archive" >&2
   find "$EXTRACT" -maxdepth 7 -type d | head -200
@@ -73,6 +76,9 @@ fi
 mkdir -p "$ROOT/Sources/AppModule/Resources/python/lib"
 cp -R "$PYHOME" "$ROOT/Sources/AppModule/Resources/python/lib/python3.8"
 
+if [[ -d "$EXTRACT/platform-site" ]]; then
+  cp -R "$EXTRACT/platform-site" "$ROOT/Sources/AppModule/Resources/python/"
+fi
 PLATFORM_CONFIG="$(find "$EXTRACT" -type d -name platform-config -print -quit || true)"
 if [[ -n "$PLATFORM_CONFIG" ]]; then
   cp -R "$PLATFORM_CONFIG" "$ROOT/Sources/AppModule/Resources/python/"
