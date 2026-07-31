@@ -24,6 +24,8 @@ jobs:
           python3 bootstrap_source.py
           cp Overrides/fetch_hitomi_payload.sh Scripts/fetch_hitomi_payload.sh
           cp Overrides/fetch_python38_runtime.sh Scripts/fetch_python38_runtime.sh
+          cp Overrides/build_unsigned_ipa.sh Scripts/build_unsigned_ipa.sh
+          cp Overrides/PythonRuntime.swift Sources/AppModule/Services/PythonRuntime.swift
           chmod +x Scripts/*.sh
 
       - name: Select Xcode
@@ -46,12 +48,15 @@ jobs:
       - name: Verify full runtime payload
         run: |
           IPA=build-unsigned/HitomiSwiftFull-unsigned.ipa
+          APP=build-unsigned/Payload/HitomiSwiftFull.app
           unzip -t "$IPA"
-          unzip -l "$IPA" | head -160
-          unzip -l "$IPA" | grep 'original_pyc.zip'
-          unzip -l "$IPA" | grep 'Python.framework/Python'
-          unzip -l "$IPA" | grep 'LibtorrentNative.framework/LibtorrentNative'
-          unzip -l "$IPA" | grep 'openssl.framework/openssl'
+          unzip -l "$IPA" > build-unsigned/ipa-list.txt
+          sed -n '1,160p' build-unsigned/ipa-list.txt
+          grep 'PythonApp/original_pyc.zip' build-unsigned/ipa-list.txt
+          grep 'python/lib/python3.8/os.py' build-unsigned/ipa-list.txt
+          grep 'LibtorrentNative.framework/LibtorrentNative' build-unsigned/ipa-list.txt
+          grep 'openssl.framework/openssl' build-unsigned/ipa-list.txt
+          nm -gU "$APP/HitomiSwiftFull" | grep '_Py_Initialize'
           shasum -a 256 "$IPA"
           python3 - <<'PY'
           from pathlib import PurePosixPath
