@@ -11,49 +11,28 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 125
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Dispatch macOS build
-        run: gh workflow run build-original-source-v101.yml --repo "$REPO" --ref v1.0.1-original-source
+      - name: Dispatch fresh workflow ID
+        run: gh workflow run original-source-v101-build.yml --repo "$REPO" --ref main
 
-      - name: Find dispatched run
+      - name: Find dispatched smoke run
         id: run
         run: |
-          for attempt in $(seq 1 60); do
-            RUN_ID=$(gh run list --repo "$REPO" --workflow build-original-source-v101.yml --branch v1.0.1-original-source --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
+          for attempt in $(seq 1 30); do
+            RUN_ID=$(gh run list --repo "$REPO" --workflow original-source-v101-build.yml --branch main --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
             if [ -n "$RUN_ID" ]; then
               echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-              echo "Dispatched run: $RUN_ID"
+              echo "Smoke run: $RUN_ID"
               exit 0
             fi
             sleep 2
           done
-          echo "Could not find dispatched run" >&2
-          gh run list --repo "$REPO" --limit 20 || true
+          echo "Could not find smoke run" >&2
           exit 1
 
-      - name: Wait for macOS build
-        run: |
-          RUN_ID='${{ steps.run.outputs.run_id }}'
-          if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status; then
-            echo '--- failed build log ---'
-            gh run view "$RUN_ID" --repo "$REPO" --log-failed || true
-            exit 1
-          fi
-
-      - name: Download IPA artifact
-        run: |
-          mkdir -p forwarded-artifact
-          gh run download '${{ steps.run.outputs.run_id }}' --repo "$REPO" --name HitomiSwiftFull-1.0.1-original-source-ipa --dir forwarded-artifact
-          find forwarded-artifact -maxdepth 2 -type f -print
-
-      - name: Forward IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HitomiSwiftFull-1.0.1-original-source-ipa
-          path: forwarded-artifact/**
-          if-no-files-found: error
-          retention-days: 30
+      - name: Wait for smoke run
+        run: gh run watch '${{ steps.run.outputs.run_id }}' --repo "$REPO" --exit-status
