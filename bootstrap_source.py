@@ -44,6 +44,58 @@ text = text.replace(
 )
 resolver.write_text(text, encoding="utf-8")
 
+# Ensure the HLS task closure returns Void rather than Optional<Void>.
+downloads = ROOT / "Sources/AppModule/Services/DownloadCoordinator.swift"
+text = downloads.read_text(encoding="utf-8")
+text = text.replace(
+    """            let task = Task { [weak self] in
+                await self?.downloadHLS(jobID)
+            }
+""",
+    """            let task = Task { [weak self] in
+                guard let self else { return }
+                await self.downloadHLS(jobID)
+            }
+""",
+)
+downloads.write_text(text, encoding="utf-8")
+
+# Avoid shadowing the mutable optional variant tuple.
+hls = ROOT / "Sources/AppModule/Resolvers/HLSResolver.swift"
+text = hls.read_text(encoding="utf-8")
+text = text.replace(
+    """                if let pendingVariant {
+                    result.variants.append(
+                        HLSVariant(
+                            url: url,
+                            bandwidth: pendingVariant.0,
+                            resolution: pendingVariant.1
+                        )
+                    )
+                    pendingVariant = nil
+""",
+    """                if let variant = pendingVariant {
+                    result.variants.append(
+                        HLSVariant(
+                            url: url,
+                            bandwidth: variant.0,
+                            resolution: variant.1
+                        )
+                    )
+                    pendingVariant = nil
+""",
+)
+hls.write_text(text, encoding="utf-8")
+
+# SwiftUI needs a writable key path for the nested port binding.
+app_model = ROOT / "Sources/AppModule/App/AppModel.swift"
+text = app_model.read_text(encoding="utf-8")
+text = text.replace(
+    "    let localServer = LocalAPIServer.shared",
+    "    var localServer = LocalAPIServer.shared",
+)
+app_model.write_text(text, encoding="utf-8")
+
 # The resources directory always exists in this repository build. Avoid using
 # an XcodeGen key that differs between releases.
 project = ROOT / "project.yml"
