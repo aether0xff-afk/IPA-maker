@@ -20,7 +20,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore v1.0 source
-        run: python3 bootstrap_source.py
+        run: |
+          python3 bootstrap_source.py
+          cp Overrides/fetch_hitomi_payload.sh Scripts/fetch_hitomi_payload.sh
+          chmod +x Scripts/*.sh
 
       - name: Select Xcode
         run: |
@@ -32,9 +35,7 @@ jobs:
         run: brew install xcodegen autoconf automake libtool pkg-config
 
       - name: Validate source files
-        run: |
-          chmod +x Scripts/*.sh
-          ./Scripts/validate_project.sh
+        run: ./Scripts/validate_project.sh
 
       - name: Build full unsigned IPA
         env:
@@ -53,6 +54,7 @@ jobs:
           shasum -a 256 "$IPA"
           python3 - <<'PY'
           from pathlib import PurePosixPath
+          import json
           import plistlib
           import zipfile
 
@@ -82,6 +84,19 @@ jobs:
               executable = f"{app_root}/{info['CFBundleExecutable']}"
               if executable not in names:
                   raise SystemExit(f"Missing app executable: {executable}")
+
+              payloads = [n for n in names if n.endswith("PythonApp/original_pyc.zip")]
+              if len(payloads) != 1:
+                  raise SystemExit(f"Expected one embedded Hitomi payload, got {payloads}")
+              payload_data = archive.read(payloads[0])
+              import io
+              with zipfile.ZipFile(io.BytesIO(payload_data)) as payload:
+                  metadata = json.loads(payload.read("HITOMI_PAYLOAD.json"))
+                  if metadata["sourceCommit"] != "4f934274ad3dc35ae40f86da8c59d76a0a47c023":
+                      raise SystemExit(f"Unexpected payload commit: {metadata}")
+                  if metadata["extractorCount"] < 75:
+                      raise SystemExit(f"Too few extractors: {metadata}")
+                  print("Validated embedded Hitomi payload:", metadata)
               print("Validated full v1.0 bundle metadata")
           PY
 
