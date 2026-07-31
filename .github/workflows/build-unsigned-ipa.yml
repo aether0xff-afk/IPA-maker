@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, v1.0]
   pull_request:
-    branches: [main]
+    branches: [main, v1-test-base]
   workflow_dispatch:
 
 permissions:
@@ -51,6 +51,39 @@ jobs:
           unzip -l "$IPA" | grep 'LibtorrentNative.framework/LibtorrentNative'
           unzip -l "$IPA" | grep 'openssl.framework/openssl'
           shasum -a 256 "$IPA"
+          python3 - <<'PY'
+          from pathlib import PurePosixPath
+          import plistlib
+          import zipfile
+
+          ipa = "build-unsigned/HitomiSwiftFull-unsigned.ipa"
+          with zipfile.ZipFile(ipa) as archive:
+              names = archive.namelist()
+              plists = [n for n in names if PurePosixPath(n).match("Payload/*.app/Info.plist")]
+              if len(plists) != 1:
+                  raise SystemExit(f"Expected one app Info.plist, got {plists}")
+              info_path = plists[0]
+              info = plistlib.loads(archive.read(info_path))
+              required = {
+                  "CFBundleExecutable",
+                  "CFBundleIdentifier",
+                  "CFBundleInfoDictionaryVersion",
+                  "CFBundleName",
+                  "CFBundlePackageType",
+                  "CFBundleShortVersionString",
+                  "CFBundleVersion",
+              }
+              missing = sorted(key for key in required if not info.get(key))
+              if missing:
+                  raise SystemExit(f"Missing bundle metadata: {missing}")
+              if info["CFBundleShortVersionString"] != "1.0.0":
+                  raise SystemExit(f"Unexpected version: {info['CFBundleShortVersionString']}")
+              app_root = str(PurePosixPath(info_path).parent)
+              executable = f"{app_root}/{info['CFBundleExecutable']}"
+              if executable not in names:
+                  raise SystemExit(f"Missing app executable: {executable}")
+              print("Validated full v1.0 bundle metadata")
+          PY
 
       - name: Upload v1.0 IPA
         uses: actions/upload-artifact@v4
