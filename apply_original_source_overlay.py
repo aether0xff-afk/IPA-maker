@@ -11,7 +11,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 BUNDLE = ROOT / 'bundle'
-PARTS = [BUNDLE / f'original_source_overlay.part{i:02d}' for i in range(5)]
+PARTS = [BUNDLE / f'original_source_overlay.chunk{i:02d}' for i in range(22)]
+EXPECTED_ENCODED_SIZE = 217_492
 EXPECTED_SIZE = 163_119
 EXPECTED_SHA256 = 'ed8731be2e5ddcb962f3d7d4860ee3f793537fe161b4a79733c5c3168c46a5b3'
 EXPECTED_SOURCE_SHA256 = '69a04581949a04d4a8af1cdec20254eb53708af925ce53edc69fde57e1a535f6'
@@ -20,9 +21,11 @@ EXPECTED_EXTRACTORS = 75
 
 missing = [str(path) for path in PARTS if not path.is_file()]
 if missing:
-    raise SystemExit(f'Missing original-source overlay parts: {missing}')
+    raise SystemExit(f'Missing original-source overlay chunks: {missing}')
 
 encoded = ''.join(''.join(path.read_text(encoding='ascii').split()) for path in PARTS)
+if len(encoded) != EXPECTED_ENCODED_SIZE:
+    raise SystemExit(f'Encoded overlay size mismatch: {len(encoded)} != {EXPECTED_ENCODED_SIZE}')
 payload = base64.b64decode(encoded, validate=True)
 digest = hashlib.sha256(payload).hexdigest()
 if len(payload) != EXPECTED_SIZE or digest != EXPECTED_SHA256:
