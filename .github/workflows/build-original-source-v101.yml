@@ -3,6 +3,8 @@ name: Rebuild iOS IPA from archived source
 on:
   push:
     branches: [v1.0.1-original-source]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
