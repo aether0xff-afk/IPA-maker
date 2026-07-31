@@ -1,0 +1,13 @@
+name: Rebuild iOS IPA from archived source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo workflow registered
