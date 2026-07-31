@@ -36,10 +36,56 @@ jobs:
       - name: Build unsigned IPA
         run: ./Scripts/build_unsigned_ipa.sh
 
-      - name: Inspect IPA
+      - name: Inspect and validate IPA
         run: |
           unzip -l build-unsigned/HitomiSwiftFull-unsigned.ipa | head -80
           shasum -a 256 build-unsigned/HitomiSwiftFull-unsigned.ipa
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import plistlib
+          from pathlib import PurePosixPath
+          import zipfile
+
+          ipa = "build-unsigned/HitomiSwiftFull-unsigned.ipa"
+          with zipfile.ZipFile(ipa) as archive:
+              app_plists = [
+                  name
+                  for name in archive.namelist()
+                  if PurePosixPath(name).match("Payload/*.app/Info.plist")
+              ]
+              if len(app_plists) != 1:
+                  raise SystemExit(f"Expected one application Info.plist, found: {app_plists}")
+
+              info_path = app_plists[0]
+              info = plistlib.loads(archive.read(info_path))
+              app_root = str(PurePosixPath(info_path).parent)
+
+              required_strings = {
+                  "CFBundleExecutable",
+                  "CFBundleIdentifier",
+                  "CFBundleInfoDictionaryVersion",
+                  "CFBundleName",
+                  "CFBundlePackageType",
+                  "CFBundleShortVersionString",
+                  "CFBundleVersion",
+              }
+              missing = sorted(key for key in required_strings if not info.get(key))
+              if missing:
+                  raise SystemExit(f"Missing required non-empty Info.plist keys: {missing}")
+
+              bundle_id = info["CFBundleIdentifier"]
+              if bundle_id != "dev.chris.hitomiswift.full":
+                  raise SystemExit(f"Unexpected CFBundleIdentifier: {bundle_id!r}")
+
+              executable = f"{app_root}/{info['CFBundleExecutable']}"
+              if executable not in archive.namelist():
+                  raise SystemExit(f"CFBundleExecutable does not exist in IPA: {executable}")
+
+              print("Validated application metadata:")
+              for key in sorted(required_strings):
+                  print(f"  {key}={info[key]}")
+          PY
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
