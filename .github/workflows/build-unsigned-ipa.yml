@@ -1,10 +1,10 @@
-name: Build Hitomi Swift 1.0 IPA
+name: Build unsigned IPA
 
 on:
   push:
-    branches: [main, v1.0]
+    branches: [main]
   pull_request:
-    branches: [main, v1-test-base]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,67 +13,55 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore v1.0 source
-        run: |
-          python3 bootstrap_source.py
-          cp Overrides/fetch_hitomi_payload.sh Scripts/fetch_hitomi_payload.sh
-          cp Overrides/fetch_python38_runtime.sh Scripts/fetch_python38_runtime.sh
-          cp Overrides/build_unsigned_ipa.sh Scripts/build_unsigned_ipa.sh
-          cp Overrides/PythonRuntime.swift Sources/AppModule/Services/PythonRuntime.swift
-          chmod +x Scripts/*.sh
+      - name: Restore bundled source
+        run: python3 bootstrap_source.py
 
       - name: Select Xcode
         run: |
           sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
           xcodebuild -version
-          swift --version
 
-      - name: Install build tools
-        run: brew install xcodegen autoconf automake libtool pkg-config
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       - name: Validate source files
         run: ./Scripts/validate_project.sh
 
-      - name: Build full unsigned IPA
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build unsigned IPA
         run: ./Scripts/build_unsigned_ipa.sh
 
-      - name: Verify full runtime payload
+      - name: Inspect and validate IPA
         run: |
-          IPA=build-unsigned/HitomiSwiftFull-unsigned.ipa
-          APP=build-unsigned/Payload/HitomiSwiftFull.app
-          unzip -t "$IPA"
-          unzip -l "$IPA" > build-unsigned/ipa-list.txt
-          sed -n '1,160p' build-unsigned/ipa-list.txt
-          grep 'PythonApp/original_pyc.zip' build-unsigned/ipa-list.txt
-          grep 'python/lib/python3.8/os.py' build-unsigned/ipa-list.txt
-          grep 'LibtorrentNative.framework/LibtorrentNative' build-unsigned/ipa-list.txt
-          grep 'openssl.framework/openssl' build-unsigned/ipa-list.txt
-          nm -gU "$APP/HitomiSwiftFull" | grep '_Py_Initialize'
-          shasum -a 256 "$IPA"
+          unzip -l build-unsigned/HitomiSwiftFull-unsigned.ipa | head -80
+          shasum -a 256 build-unsigned/HitomiSwiftFull-unsigned.ipa
           python3 - <<'PY'
-          from pathlib import PurePosixPath
-          import io
-          import json
+          from __future__ import annotations
+
           import plistlib
+          from pathlib import PurePosixPath
           import zipfile
 
           ipa = "build-unsigned/HitomiSwiftFull-unsigned.ipa"
           with zipfile.ZipFile(ipa) as archive:
-              names = archive.namelist()
-              plists = [n for n in names if PurePosixPath(n).match("Payload/*.app/Info.plist")]
-              if len(plists) != 1:
-                  raise SystemExit(f"Expected one app Info.plist, got {plists}")
-              info_path = plists[0]
+              app_plists = [
+                  name
+                  for name in archive.namelist()
+                  if PurePosixPath(name).match("Payload/*.app/Info.plist")
+              ]
+              if len(app_plists) != 1:
+                  raise SystemExit(f"Expected one application Info.plist, found: {app_plists}")
+
+              info_path = app_plists[0]
               info = plistlib.loads(archive.read(info_path))
-              required = {
+              app_root = str(PurePosixPath(info_path).parent)
+
+              required_strings = {
                   "CFBundleExecutable",
                   "CFBundleIdentifier",
                   "CFBundleInfoDictionaryVersion",
@@ -82,47 +70,38 @@ jobs:
                   "CFBundleShortVersionString",
                   "CFBundleVersion",
               }
-              missing = sorted(key for key in required if not info.get(key))
+              missing = sorted(key for key in required_strings if not info.get(key))
               if missing:
-                  raise SystemExit(f"Missing bundle metadata: {missing}")
-              if info["CFBundleShortVersionString"] != "1.0.0":
-                  raise SystemExit(f"Unexpected version: {info['CFBundleShortVersionString']}")
-              app_root = str(PurePosixPath(info_path).parent)
-              executable = f"{app_root}/{info['CFBundleExecutable']}"
-              if executable not in names:
-                  raise SystemExit(f"Missing app executable: {executable}")
+                  raise SystemExit(f"Missing required non-empty Info.plist keys: {missing}")
 
-              payloads = [n for n in names if n.endswith("PythonApp/original_pyc.zip")]
-              if len(payloads) != 1:
-                  raise SystemExit(f"Expected one embedded Hitomi payload, got {payloads}")
-              payload_data = archive.read(payloads[0])
-              with zipfile.ZipFile(io.BytesIO(payload_data)) as payload:
-                  metadata = json.loads(payload.read("HITOMI_PAYLOAD.json"))
-                  if metadata["sourceCommit"] != "4f934274ad3dc35ae40f86da8c59d76a0a47c023":
-                      raise SystemExit(f"Unexpected payload commit: {metadata}")
-                  if metadata["extractorCount"] != 72:
-                      raise SystemExit(f"Unexpected extractor count: {metadata}")
-                  print("Validated embedded Hitomi payload:", metadata)
-              print("Validated full v1.0 bundle metadata")
+              bundle_id = info["CFBundleIdentifier"]
+              if bundle_id != "dev.chris.hitomiswift.full":
+                  raise SystemExit(f"Unexpected CFBundleIdentifier: {bundle_id!r}")
+
+              executable = f"{app_root}/{info['CFBundleExecutable']}"
+              if executable not in archive.namelist():
+                  raise SystemExit(f"CFBundleExecutable does not exist in IPA: {executable}")
+
+              print("Validated application metadata:")
+              for key in sorted(required_strings):
+                  print(f"  {key}={info[key]}")
           PY
 
-      - name: Upload v1.0 IPA
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: HitomiSwiftFull-v1.0-unsigned-ipa
+          name: HitomiSwiftFull-unsigned-ipa
           path: build-unsigned/HitomiSwiftFull-unsigned.ipa
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Upload build diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: HitomiSwiftFull-v1.0-build-diagnostics
+          name: HitomiSwiftFull-build-diagnostics
           path: |
             build-unsigned
             HitomiSwiftFull.xcodeproj
-            .runtime-cache
-            Runtime
           if-no-files-found: ignore
           retention-days: 7
