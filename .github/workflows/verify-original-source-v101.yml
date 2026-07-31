@@ -11,48 +11,31 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 125
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Dispatch macOS original-source build
-        run: gh workflow run original-source-v101-build.yml --repo "$REPO" --ref main
+      - name: Dispatch private checkout test
+        run: gh workflow run original-source-v101-checkout-test.yml --repo "$REPO" --ref main
 
-      - name: Find dispatched build
+      - name: Find checkout test
         id: run
         run: |
-          for attempt in $(seq 1 60); do
-            RUN_ID=$(gh run list --repo "$REPO" --workflow original-source-v101-build.yml --branch main --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
+          for attempt in $(seq 1 30); do
+            RUN_ID=$(gh run list --repo "$REPO" --workflow original-source-v101-checkout-test.yml --branch main --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
             if [ -n "$RUN_ID" ]; then
               echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-              echo "Original-source build: $RUN_ID"
               exit 0
             fi
             sleep 2
           done
-          echo "Could not find dispatched build" >&2
           exit 1
 
-      - name: Wait for macOS build
+      - name: Wait and print checkout result
         run: |
           RUN_ID='${{ steps.run.outputs.run_id }}'
           if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status; then
-            echo '--- failed build log ---'
             gh run view "$RUN_ID" --repo "$REPO" --log-failed || true
             exit 1
           fi
-
-      - name: Download IPA artifact
-        run: |
-          mkdir -p forwarded-artifact
-          gh run download '${{ steps.run.outputs.run_id }}' --repo "$REPO" --name HitomiSwiftFull-1.0.1-original-source-ipa --dir forwarded-artifact
-          find forwarded-artifact -maxdepth 2 -type f -print
-
-      - name: Forward IPA artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: HitomiSwiftFull-1.0.1-original-source-ipa
-          path: forwarded-artifact/**
-          if-no-files-found: error
-          retention-days: 30
