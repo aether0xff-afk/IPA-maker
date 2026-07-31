@@ -19,44 +19,46 @@ for page in pages:
     releases.extend(page if isinstance(page, list) else [])
 for release in releases:
     for asset in release.get("assets", []):
-        name = asset.get("name", "").lower()
-        if "3.8" in name and "ios" in name and (name.endswith(".tar.gz") or name.endswith(".zip")):
+        original = asset.get("name", "")
+        name = original.lower()
+        if "3.8" in name and "ios" in name and name.endswith(".tar.gz"):
             json.dump(
-                {"id": asset["id"], "name": asset["name"], "tag": release.get("tag_name")},
+                {"name": original, "tag": release.get("tag_name")},
                 open(sys.argv[2], "w"),
             )
-            print(asset["name"])
+            print(f"{release.get('tag_name')} / {original}")
             raise SystemExit(0)
 raise SystemExit(2)
 PY
   then
-    ASSET_ID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$CACHE/asset.json")"
-    gh api "repos/beeware/Python-Apple-support/releases/assets/$ASSET_ID" \
-      -H 'Accept: application/octet-stream' > "$ARCHIVE"
+    ASSET_NAME="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["name"])' "$CACHE/asset.json")"
+    RELEASE_TAG="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tag"])' "$CACHE/asset.json")"
+    rm -f "$ARCHIVE"
+    gh release download "$RELEASE_TAG" \
+      --repo beeware/Python-Apple-support \
+      --pattern "$ASSET_NAME" \
+      --output "$ARCHIVE"
+    tar -tzf "$ARCHIVE" >/dev/null
   else
     echo "No prebuilt Python 3.8 support asset found; building the 3.8 branch."
     SRC="$CACHE/Python-Apple-support"
     rm -rf "$SRC"
     git clone --depth 1 --branch 3.8 https://github.com/beeware/Python-Apple-support.git "$SRC"
     make -C "$SRC" iOS
-    BUILT="$(find "$SRC/dist" -type f \( -name '*iOS*.tar.gz' -o -name '*iOS*.zip' \) -print -quit)"
+    BUILT="$(find "$SRC/dist" -type f -name '*iOS*.tar.gz' -print -quit)"
     if [[ -z "$BUILT" ]]; then
       echo "Python 3.8 iOS support build did not produce an archive." >&2
       find "$SRC/dist" -maxdepth 2 -type f -print || true
       exit 3
     fi
     cp "$BUILT" "$ARCHIVE"
+    tar -tzf "$ARCHIVE" >/dev/null
   fi
 fi
 
 rm -rf "$EXTRACT" "$ROOT/Runtime/PythonFrameworks" "$ROOT/Sources/AppModule/Resources/python"
 mkdir -p "$EXTRACT" "$ROOT/Runtime/PythonFrameworks" "$ROOT/Sources/AppModule/Resources/python"
-
-if file "$ARCHIVE" | grep -qi zip; then
-  ditto -x -k "$ARCHIVE" "$EXTRACT"
-else
-  tar -xf "$ARCHIVE" -C "$EXTRACT"
-fi
+tar -xzf "$ARCHIVE" -C "$EXTRACT"
 
 while IFS= read -r -d '' framework; do
   cp -R "$framework" "$ROOT/Runtime/PythonFrameworks/"
