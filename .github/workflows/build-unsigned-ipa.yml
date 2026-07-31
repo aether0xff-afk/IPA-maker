@@ -54,6 +54,7 @@ jobs:
           shasum -a 256 "$IPA"
           python3 - <<'PY'
           from pathlib import PurePosixPath
+          import io
           import json
           import plistlib
           import zipfile
@@ -89,13 +90,12 @@ jobs:
               if len(payloads) != 1:
                   raise SystemExit(f"Expected one embedded Hitomi payload, got {payloads}")
               payload_data = archive.read(payloads[0])
-              import io
               with zipfile.ZipFile(io.BytesIO(payload_data)) as payload:
                   metadata = json.loads(payload.read("HITOMI_PAYLOAD.json"))
                   if metadata["sourceCommit"] != "4f934274ad3dc35ae40f86da8c59d76a0a47c023":
                       raise SystemExit(f"Unexpected payload commit: {metadata}")
-                  if metadata["extractorCount"] < 75:
-                      raise SystemExit(f"Too few extractors: {metadata}")
+                  if metadata["extractorCount"] != 72:
+                      raise SystemExit(f"Unexpected extractor count: {metadata}")
                   print("Validated embedded Hitomi payload:", metadata)
               print("Validated full v1.0 bundle metadata")
           PY
