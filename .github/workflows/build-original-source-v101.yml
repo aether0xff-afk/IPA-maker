@@ -1,6 +1,11 @@
 name: Rebuild iOS IPA from archived source
 
-on: [workflow_dispatch]
+on:
+  push:
+    branches: [v1.0.1-original-source]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,8 +18,6 @@ jobs:
     steps:
       - name: Checkout IPA maker branch
         uses: actions/checkout@v4
-        with:
-          ref: v1.0.1-original-source
 
       - name: Checkout archived original source
         uses: actions/checkout@v4
