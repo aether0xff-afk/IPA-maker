@@ -1,0 +1,41 @@
+name: Verify original-source 1.0.1 build
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch private checkout test
+        run: gh workflow run original-source-v101-checkout-test.yml --repo "$REPO" --ref main
+
+      - name: Find checkout test
+        id: run
+        run: |
+          for attempt in $(seq 1 30); do
+            RUN_ID=$(gh run list --repo "$REPO" --workflow original-source-v101-checkout-test.yml --branch main --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
+            if [ -n "$RUN_ID" ]; then
+              echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Wait and print checkout result
+        run: |
+          RUN_ID='${{ steps.run.outputs.run_id }}'
+          if ! gh run watch "$RUN_ID" --repo "$REPO" --exit-status; then
+            gh run view "$RUN_ID" --repo "$REPO" --log-failed || true
+            exit 1
+          fi

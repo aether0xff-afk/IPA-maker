@@ -1,0 +1,128 @@
+name: Build Hitomi Swift 1.0 IPA
+
+on:
+  push:
+    branches: [main, v1.0]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore v1.0 source
+        run: |
+          python3 bootstrap_v1.py
+          cp Overrides/fetch_hitomi_payload.sh Scripts/fetch_hitomi_payload.sh
+          cp Overrides/fetch_python38_runtime.sh Scripts/fetch_python38_runtime.sh
+          cp Overrides/build_unsigned_ipa.sh Scripts/build_unsigned_ipa.sh
+          cp Overrides/PythonRuntime.swift Sources/AppModule/Services/PythonRuntime.swift
+          chmod +x Scripts/*.sh
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
+          xcodebuild -version
+          swift --version
+
+      - name: Install build tools
+        run: brew install xcodegen autoconf automake libtool pkg-config
+
+      - name: Validate source files
+        run: ./Scripts/validate_project.sh
+
+      - name: Build full unsigned IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./Scripts/build_unsigned_ipa.sh
+
+      - name: Verify full runtime payload
+        run: |
+          IPA=build-unsigned/HitomiSwiftFull-unsigned.ipa
+          APP=build-unsigned/Payload/HitomiSwiftFull.app
+          unzip -t "$IPA"
+          unzip -l "$IPA" > build-unsigned/ipa-list.txt
+          sed -n '1,160p' build-unsigned/ipa-list.txt
+          grep 'PythonApp/original_pyc.zip' build-unsigned/ipa-list.txt
+          grep 'python/lib/python3.8/os.py' build-unsigned/ipa-list.txt
+          grep 'LibtorrentNative.framework/LibtorrentNative' build-unsigned/ipa-list.txt
+          grep 'openssl.framework/openssl' build-unsigned/ipa-list.txt
+          nm -gU "$APP/HitomiSwiftFull" | grep '_Py_Initialize'
+          shasum -a 256 "$IPA"
+          python3 - <<'PY'
+          from pathlib import PurePosixPath
+          import io
+          import json
+          import plistlib
+          import zipfile
+
+          ipa = "build-unsigned/HitomiSwiftFull-unsigned.ipa"
+          with zipfile.ZipFile(ipa) as archive:
+              names = archive.namelist()
+              plists = [n for n in names if PurePosixPath(n).match("Payload/*.app/Info.plist")]
+              if len(plists) != 1:
+                  raise SystemExit(f"Expected one app Info.plist, got {plists}")
+              info_path = plists[0]
+              info = plistlib.loads(archive.read(info_path))
+              required = {
+                  "CFBundleExecutable",
+                  "CFBundleIdentifier",
+                  "CFBundleInfoDictionaryVersion",
+                  "CFBundleName",
+                  "CFBundlePackageType",
+                  "CFBundleShortVersionString",
+                  "CFBundleVersion",
+              }
+              missing = sorted(key for key in required if not info.get(key))
+              if missing:
+                  raise SystemExit(f"Missing bundle metadata: {missing}")
+              if info["CFBundleShortVersionString"] != "1.0.0":
+                  raise SystemExit(f"Unexpected version: {info['CFBundleShortVersionString']}")
+              app_root = str(PurePosixPath(info_path).parent)
+              executable = f"{app_root}/{info['CFBundleExecutable']}"
+              if executable not in names:
+                  raise SystemExit(f"Missing app executable: {executable}")
+
+              payloads = [n for n in names if n.endswith("PythonApp/original_pyc.zip")]
+              if len(payloads) != 1:
+                  raise SystemExit(f"Expected one embedded Hitomi payload, got {payloads}")
+              payload_data = archive.read(payloads[0])
+              with zipfile.ZipFile(io.BytesIO(payload_data)) as payload:
+                  metadata = json.loads(payload.read("HITOMI_PAYLOAD.json"))
+                  if metadata["sourceCommit"] != "4f934274ad3dc35ae40f86da8c59d76a0a47c023":
+                      raise SystemExit(f"Unexpected payload commit: {metadata}")
+                  if metadata["extractorCount"] != 72:
+                      raise SystemExit(f"Unexpected extractor count: {metadata}")
+                  print("Validated embedded Hitomi payload:", metadata)
+              print("Validated full v1.0 bundle metadata")
+          PY
+
+      - name: Upload v1.0 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HitomiSwiftFull-v1.0-unsigned-ipa
+          path: build-unsigned/HitomiSwiftFull-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HitomiSwiftFull-v1.0-build-diagnostics
+          path: |
+            build-unsigned
+            HitomiSwiftFull.xcodeproj
+            .runtime-cache
+            Runtime
+          if-no-files-found: ignore
+          retention-days: 7
