@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 from pathlib import Path
 import plistlib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-OVERLAY = ROOT / "original-source-rebuild" / "source_rebuild_overlay.zip"
-EXPECTED_SIZE = 163_119
-EXPECTED_SHA256 = "ed8731be2e5ddcb962f3d7d4860ee3f793537fe161b4a79733c5c3168c46a5b3"
+BUNDLE = ROOT / "bundle"
+PARTS = [BUNDLE / f"original_source_overlay.chunk{i:02d}" for i in range(22)]
+EXPECTED_ENCODED_SIZE = 218_808
+EXPECTED_SIZE = 164_106
+EXPECTED_SHA256 = "222b88369bc2e1786933be8ff5798fa103695aee2a904bc893494f1cf7b7d904"
 EXPECTED_SOURCE_SHA256 = "69a04581949a04d4a8af1cdec20254eb53708af925ce53edc69fde57e1a535f6"
 EXPECTED_SOURCE_COMMIT = "6a87311"
-EXPECTED_EXTRACTORS = 75
+EXPECTED_SOURCE_EXTRACTORS = 75
+EXPECTED_FALLBACK_EXTRACTORS = 9
+EXPECTED_ROUTABLE_EXTRACTORS = 84
 
-if not OVERLAY.is_file():
-    raise SystemExit(f"Missing original-source overlay: {OVERLAY}")
+missing = [str(path) for path in PARTS if not path.is_file()]
+if missing:
+    raise SystemExit(f"Missing original-source overlay chunks: {missing}")
 
-payload = OVERLAY.read_bytes()
+encoded = "".join("".join(path.read_text(encoding="ascii").split()) for path in PARTS)
+if len(encoded) != EXPECTED_ENCODED_SIZE:
+    raise SystemExit(f"Encoded overlay size mismatch: {len(encoded)} != {EXPECTED_ENCODED_SIZE}")
+payload = base64.b64decode(encoded, validate=True)
 digest = hashlib.sha256(payload).hexdigest()
 if len(payload) != EXPECTED_SIZE or digest != EXPECTED_SHA256:
     raise SystemExit(
@@ -26,7 +36,7 @@ if len(payload) != EXPECTED_SIZE or digest != EXPECTED_SHA256:
         f"expected size={EXPECTED_SIZE}, sha256={EXPECTED_SHA256}"
     )
 
-with zipfile.ZipFile(OVERLAY) as archive:
+with zipfile.ZipFile(io.BytesIO(payload)) as archive:
     bad = archive.testzip()
     if bad:
         raise SystemExit(f"Corrupt original-source overlay member: {bad}")
@@ -41,14 +51,24 @@ if source_digest != EXPECTED_SOURCE_SHA256:
     )
 
 manifest = json.loads((python_app / "legacy_manifest.json").read_text(encoding="utf-8"))
-if manifest.get("sourceCommit") != EXPECTED_SOURCE_COMMIT:
-    raise SystemExit(f"Unexpected source commit: {manifest.get('sourceCommit')!r}")
-if manifest.get("extractorCount") != EXPECTED_EXTRACTORS:
-    raise SystemExit(f"Unexpected extractor count: {manifest.get('extractorCount')!r}")
+checks = {
+    "sourceCommit": EXPECTED_SOURCE_COMMIT,
+    "sourceExtractorCount": EXPECTED_SOURCE_EXTRACTORS,
+    "legacyFallbackCount": EXPECTED_FALLBACK_EXTRACTORS,
+    "extractorCount": EXPECTED_ROUTABLE_EXTRACTORS,
+}
+for key, expected in checks.items():
+    if manifest.get(key) != expected:
+        raise SystemExit(f"Unexpected {key}: {manifest.get(key)!r} != {expected!r}")
+if len(manifest.get("entries", [])) != EXPECTED_ROUTABLE_EXTRACTORS:
+    raise SystemExit("Unexpected manifest entry count")
 
 with zipfile.ZipFile(source_zip) as source:
-    members = [name for name in source.namelist() if name.startswith("extractor/") and name.endswith("_downloader.py")]
-    if len(members) != EXPECTED_EXTRACTORS:
+    members = [
+        name for name in source.namelist()
+        if name.startswith("extractor/") and name.endswith("_downloader.py")
+    ]
+    if len(members) != EXPECTED_SOURCE_EXTRACTORS:
         raise SystemExit(f"Unexpected source member count: {len(members)}")
 
 info_path = ROOT / "Info.plist"
@@ -63,5 +83,9 @@ for script in (ROOT / "Scripts").glob("*.sh"):
     script.chmod(0o755)
 
 print(f"Applied original-source rebuild overlay: {len(payload):,} bytes, SHA-256 {digest}")
-print(f"Pinned original extractor source: commit {EXPECTED_SOURCE_COMMIT}, {EXPECTED_EXTRACTORS} modules")
+print(
+    f"Pinned routing: {EXPECTED_SOURCE_EXTRACTORS} original source + "
+    f"{EXPECTED_FALLBACK_EXTRACTORS} Python 3.8 fallback = "
+    f"{EXPECTED_ROUTABLE_EXTRACTORS} extractors"
+)
 print(f"Original source ZIP SHA-256: {source_digest}")
