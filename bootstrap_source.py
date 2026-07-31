@@ -27,6 +27,13 @@ with zipfile.ZipFile(io.BytesIO(payload)) as archive:
     archive.testzip()
     archive.extractall(ROOT)
 
+# Xcode 16.4 ships Swift 6.1. The source package was authored with the 6.2
+# manifest version, but it doesn't use manifest APIs that require 6.2.
+package = ROOT / "Package.swift"
+text = package.read_text(encoding="utf-8")
+text = text.replace("// swift-tools-version: 6.2", "// swift-tools-version: 6.1", 1)
+package.write_text(text, encoding="utf-8")
+
 # Xcode's actor isolation checking requires the service itself to live on the
 # main actor because the resolver protocol is main-actor isolated.
 resolver = ROOT / "Sources/AppModule/Resolvers/ResolverService.swift"
