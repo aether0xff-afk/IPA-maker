@@ -34,7 +34,7 @@ overlay_path = ROOT / "bundle/v1_overlay.b64"
 overlay_encoded = "".join(overlay_path.read_text(encoding="ascii").split())
 overlay_payload = base64.b64decode(overlay_encoded)
 overlay_sha = hashlib.sha256(overlay_payload).hexdigest()
-expected_overlay_sha = "3b880271e8e80e4d205258cbe2b638758723c01972e803ef1799c9a825a0b7f1"
+expected_overlay_sha = "8370ef898276b5eaf0b65e75b65b4bd92e99a6fba1e83a84377d4dc726bccf48"
 if overlay_sha != expected_overlay_sha:
     raise SystemExit(
         f"v1 overlay SHA-256 mismatch: expected {expected_overlay_sha}, got {overlay_sha}"
