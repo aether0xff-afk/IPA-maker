@@ -43,8 +43,8 @@ files = sorted(
     if path.is_file() and path.suffix.lower() in extensions
 )
 extractors = [path for path in files if path.parent.name == "extractor" and path.name.endswith("_downloader.py")]
-if len(extractors) < 75:
-    raise SystemExit(f"Unexpectedly small extractor snapshot: {len(extractors)}")
+if len(extractors) != 72:
+    raise SystemExit(f"Extractor snapshot changed: expected 72, got {len(extractors)}")
 
 metadata = {
     "sourceRepository": "liusichao/Hitomi-Downloader",
@@ -55,7 +55,6 @@ metadata = {
 }
 
 with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-    # zipimport does not reliably discover an implicit namespace package.
     archive.writestr("extractor/__init__.py", "# Embedded Hitomi extractor package\n")
     for path in files:
         relative = path.relative_to(source).as_posix()
