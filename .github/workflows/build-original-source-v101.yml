@@ -1,12 +1,305 @@
-name: Build original source 1.0.1
+name: Rebuild iOS IPA from archived source
 
 on:
   push:
     branches: [v1.0.1-original-source]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  prepare:
+  build:
     runs-on: macos-15
+    timeout-minutes: 120
+
     steps:
-      - run: echo preparing original source build
+      - name: Checkout IPA maker branch
+        uses: actions/checkout@v4
+
+      - name: Checkout archived original source
+        uses: actions/checkout@v4
+        with:
+          repository: aether0xff-afk/Hitomi-Downloader-Archived
+          ref: 6a873114c64106a5b45c39fcb3a1170d14a33589
+          path: source
+          token: ${{ secrets.GH_PAT || secrets.PAT || secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Restore 1.0 runtime project
+        run: python3 bootstrap_v1.py
+
+      - name: Apply original-source runtime fixes
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+          import ast, json, plistlib, shutil
+          from pathlib import Path
+
+          source = Path('source/src/extractor')
+          app = Path('.')
+          python_app = app / 'Sources/AppModule/Resources/PythonApp'
+          original = python_app / 'original_source/extractor'
+          shutil.rmtree(original.parent, ignore_errors=True)
+          original.mkdir(parents=True)
+
+          files = sorted(source.glob('*.py'), key=lambda p: p.name.lower())
+          if len(files) != 75:
+              raise SystemExit(f'Expected 75 archived extractor files, found {len(files)}')
+          (original / '__init__.py').write_text('# archived original extractor package\n', encoding='utf-8')
+          for path in files:
+              shutil.copy2(path, original / path.name)
+
+          fallback = {
+              'bili': ['bilibili.com', 'b23.tv'], 'coub': ['coub.com'],
+              'discord': ['discord.com', 'discordapp.com', 'discordcdn.com'],
+              'jmana': ['jmana.net'], 'nico': ['nicovideo.jp', 'nico.ms'],
+              'pixiv': ['pixiv.net'], 'weibo': ['weibo.com'], 'xhamster': ['xhamster.com'],
+          }
+          def literal(node, default=None):
+              try: return ast.literal_eval(node)
+              except Exception: return default
+          entries = []
+          for path in files:
+              tree = ast.parse(path.read_text(encoding='utf-8-sig'), filename=str(path))
+              selected = None
+              for node in tree.body:
+                  if not isinstance(node, ast.ClassDef): continue
+                  values = {}
+                  for statement in node.body:
+                      if isinstance(statement, ast.Assign):
+                          for target in statement.targets:
+                              if isinstance(target, ast.Name): values[target.id] = literal(statement.value)
+                      elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+                          values[statement.target.id] = literal(statement.value)
+                  if isinstance(values.get('type'), str):
+                      selected = (node, values); break
+              if selected is None:
+                  raise SystemExit(f'No Downloader class in {path.name}')
+              node, values = selected; kind = values['type']
+              urls = values.get('URLS') or fallback.get(kind, [])
+              if not isinstance(urls, (list, tuple)): urls = []
+              entries.append({
+                  'module': f'extractor.{path.stem}', 'sourceFile': path.name,
+                  'className': node.name, 'type': kind,
+                  'urls': [str(value) for value in urls if isinstance(value, str)],
+                  'displayName': str(values.get('display_name') or kind),
+                  'single': bool(values.get('single', False)), 'sourceCommit': '6a87311',
+              })
+          manifest = {'schemaVersion': 2, 'source': 'aether0xff-afk/Hitomi-Downloader-Archived',
+                      'sourceCommit': '6a87311', 'extractorCount': 75, 'entries': entries}
+          (python_app / 'legacy_manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+
+          runtime = app / 'Sources/AppModule/Services/PythonRuntime.swift'
+          text = runtime.read_text(encoding='utf-8')
+          text = text.replace(
+              'pythonRoot.appendingPathComponent("ios_compat").path,\n                pythonRoot.path,',
+              'pythonRoot.appendingPathComponent("ios_compat").path,\n                pythonRoot.appendingPathComponent("original_source").path,\n                pythonRoot.path,'
+          )
+          text = text.replace('            Task { await refreshDiagnostics() }\n', '')
+          text = text.replace(
+              '            isAvailable = true\n            status = "Python 3.8 레거시 추출기 엔진 준비됨"',
+              '            library.saveThread()\n            isAvailable = true\n            status = "원본 Python 소스 75개 · 분석 준비됨"'
+          )
+          text = text.replace(
+              '            "prefer_mp4": UserDefaults.standard.bool(forKey: "preferMP4")',
+              '            "prefer_mp4": UserDefaults.standard.bool(forKey: "preferMP4"),\n            "network_timeout": 12,\n            "analysis_timeout": 25'
+          )
+          text = text.replace(
+              '    typealias GILRelease = @convention(c) (Int32) -> Void\n    typealias PrintError',
+              '    typealias GILRelease = @convention(c) (Int32) -> Void\n    typealias SaveThread = @convention(c) () -> UnsafeMutableRawPointer?\n    typealias PrintError'
+          )
+          text = text.replace(
+              '    let releaseGIL: GILRelease\n    let printError',
+              '    let releaseGIL: GILRelease\n    let saveThread: SaveThread\n    let printError'
+          )
+          text = text.replace(
+              '        self.releaseGIL = try Self.symbol("PyGILState_Release", handle: handle)\n        self.printError',
+              '        self.releaseGIL = try Self.symbol("PyGILState_Release", handle: handle)\n        self.saveThread = try Self.symbol("PyEval_SaveThread", handle: handle)\n        self.printError'
+          )
+          runtime.write_text(text, encoding='utf-8')
+
+          bridge = python_app / 'ios_bridge.py'
+          text = bridge.read_text(encoding='utf-8')
+          text = text.replace('import os\nimport re', 'import os\nimport queue\nimport re\nimport socket\nimport threading')
+          text = text.replace(
+              'with open(MANIFEST_PATH, "r", encoding="utf-8") as f:\n    MANIFEST = json.load(f)',
+              'with open(MANIFEST_PATH, "r", encoding="utf-8") as f:\n    _manifest = json.load(f)\nMANIFEST = _manifest.get("entries", _manifest)'
+          )
+          helper = '''
+
+def _configure_timeouts(seconds):
+    seconds = max(3.0, min(float(seconds), 30.0))
+    socket.setdefaulttimeout(seconds)
+    try:
+        import requests
+        old = requests.sessions.Session.request
+        if not getattr(old, "_hitomi_timeout_patch", False):
+            def request(self, method, url, **kwargs):
+                kwargs.setdefault("timeout", seconds)
+                return old(self, method, url, **kwargs)
+            request._hitomi_timeout_patch = True
+            requests.sessions.Session.request = request
+    except Exception:
+        pass
+
+def _bounded(call, seconds):
+    result = queue.Queue(maxsize=1)
+    def worker():
+        try: result.put((True, call()))
+        except BaseException as error: result.put((False, error))
+    thread = threading.Thread(target=worker, name="hitomi-extractor", daemon=True)
+    thread.start(); thread.join(max(5.0, min(float(seconds), 60.0)))
+    if thread.is_alive(): raise TimeoutError("분석 제한 시간을 초과했습니다")
+    ok, value = result.get_nowait()
+    if ok: return value
+    raise value
+'''
+          text = text.replace('\n\ndef _matches(', helper + '\n\ndef _matches(', 1)
+          text = text.replace(
+              '    result = _direct(url) or _legacy_resolve(url, options)',
+              '    _configure_timeouts(options.get("network_timeout", 12))\n    result = _bounded(lambda: _direct(url) or _legacy_resolve(url, options), options.get("analysis_timeout", 25))'
+          )
+          bridge.write_text(text, encoding='utf-8')
+
+          utils = python_app / 'ios_compat/utils.py'
+          text = utils.read_text(encoding='utf-8')
+          start = text.index('def try_n(')
+          end = text.index('\n\ndef check_alive', start)
+          replacement = '''def try_n(n, sleep=0):
+    import functools, time
+    def decorator(function):
+        @functools.wraps(function)
+        def wrapped(*args, **kwargs):
+            last = None
+            for attempt in range(max(1, int(n))):
+                try: return function(*args, **kwargs)
+                except Exception as error:
+                    last = error
+                    if sleep and attempt + 1 < int(n): time.sleep(float(sleep))
+            raise last
+        return wrapped
+    return decorator
+'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(
+              'class LazyUrl:\n    def __init__',
+              'class LazyUrl:\n    @classmethod\n    def register(cls, function):\n        return function\n\n    def __init__'
+          )
+          text = text.replace('        self._value = None\n\n    def resolve', '        self._value = None\n        self._url = referer\n\n    def __call__(self):\n        return self.resolve()\n\n    def resolve')
+          text = text.replace('    def print_(self, *values):\n        print(*values)', '    def print_(self, *values):\n        print(*values)\n\n    def setTitle(self, value):\n        self.title = value\n\n    def showCookie(self, *args, **kwargs):\n        return None\n\n    def format(self, value):\n        return value')
+          utils.write_text(text, encoding='utf-8')
+
+          downloader = python_app / 'ios_compat/downloader.py'
+          text = downloader.read_text(encoding='utf-8').replace('REPLACE_UA = False', 'REPLACE_UA = {}')
+          text = text.replace('kwargs.get("timeout", 30)', 'kwargs.get("timeout", 12)')
+          downloader.write_text(text, encoding='utf-8')
+
+          selector = python_app / 'ios_compat/selector.py'
+          selector.write_text('''class Cancel(Exception):
+    pass
+
+def register(*args, **kwargs):
+    return lambda value: value
+
+def options(*args, **kwargs):
+    return lambda value: value
+
+def default_option(*args, **kwargs):
+    return lambda value: value
+''', encoding='utf-8')
+          (python_app / 'ios_compat/ratelimit.py').write_text('''def limits(*args, **kwargs):
+    return lambda function: function
+
+def sleep_and_retry(function):
+    return function
+''', encoding='utf-8')
+          (python_app / 'ios_compat/m3u8.py').write_text('''class M3U8:
+    def __init__(self, uri=None, *args, **kwargs):
+        self.uri=uri; self.playlists=[]; self.segments=[]
+
+def loads(*args, **kwargs):
+    return M3U8()
+''', encoding='utf-8')
+
+          project = app / 'project.yml'
+          text = project.read_text(encoding='utf-8').replace('MARKETING_VERSION: "1.0.0"', 'MARKETING_VERSION: "1.0.1"').replace('CURRENT_PROJECT_VERSION: "100"', 'CURRENT_PROJECT_VERSION: "101"')
+          project.write_text(text, encoding='utf-8')
+          info_path = app / 'Info.plist'
+          with info_path.open('rb') as stream: info = plistlib.load(stream)
+          info['CFBundleShortVersionString']='1.0.1'; info['CFBundleVersion']='101'
+          with info_path.open('wb') as stream: plistlib.dump(info, stream, fmt=plistlib.FMT_XML, sort_keys=False)
+          print('Applied original-source rebuild: 75 modules, GIL release, lazy diagnostics, 12s network / 25s analysis limits')
+          PY
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache native runtimes
+        uses: actions/cache@v4
+        with:
+          path: .runtime-cache
+          key: hitomi-original-v101-${{ runner.os }}-${{ runner.arch }}-python38-libtorrent0212
+
+      - name: Validate patched source
+        run: |
+          ./Scripts/validate_project.sh
+          test "$(find Sources/AppModule/Resources/PythonApp/original_source/extractor -name '*.py' | wc -l | tr -d ' ')" = 76
+          python3 - <<'PY'
+          import json
+          data=json.load(open('Sources/AppModule/Resources/PythonApp/legacy_manifest.json'))
+          assert data['sourceCommit']=='6a87311' and data['extractorCount']==75
+          print('validated original-source manifest')
+          PY
+
+      - name: Fetch native runtimes
+        run: |
+          ./Scripts/fetch_python38_runtime.sh
+          ./Scripts/fetch_torrent_runtime.sh
+
+      - name: Build complete unsigned IPA
+        env:
+          HITOMI_SKIP_RUNTIMES: '1'
+        run: ./Scripts/build_unsigned_ipa.sh
+
+      - name: Verify rebuilt IPA
+        run: |
+          IPA=build-unsigned/HitomiSwiftFull-unsigned.ipa
+          rm -rf verify && mkdir verify
+          ditto -x -k "$IPA" verify
+          APP=verify/Payload/HitomiSwiftFull.app
+          test -x "$APP/HitomiSwiftFull"
+          test "$(find "$APP/PythonApp/original_source/extractor" -name '*.py' | wc -l | tr -d ' ')" = 76
+          test -f "$APP/PythonApp/original_pyc.zip"
+          test -d "$APP/python/lib/python3.8"
+          test -d "$APP/Frameworks/Python.framework"
+          test -d "$APP/Frameworks/LibtorrentNative.framework"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist" | grep -Fx '1.0.1'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist" | grep -Fx '101'
+          strings "$APP/HitomiSwiftFull" | grep -F 'PyEval_SaveThread'
+          shasum -a 256 "$IPA"
+
+      - name: Upload rebuilt IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: HitomiSwiftFull-1.0.1-original-source-ipa
+          path: build-unsigned/HitomiSwiftFull-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HitomiSwiftFull-1.0.1-original-source-diagnostics
+          path: |
+            build-unsigned
+            HitomiSwiftFull.xcodeproj
+          if-no-files-found: ignore
+          retention-days: 14
