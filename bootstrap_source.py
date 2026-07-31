@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 from pathlib import Path
+import plistlib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
@@ -26,6 +27,44 @@ payload = base64.b64decode(encoded, validate=True)
 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
     archive.testzip()
     archive.extractall(ROOT)
+
+# The bundled custom Info.plist originally contained only feature-specific
+# values. Xcode can still compile such a bundle, but sideloading tools require
+# the standard CFBundle metadata to identify and re-sign the application.
+info_plist = ROOT / "Info.plist"
+with info_plist.open("rb") as stream:
+    info = plistlib.load(stream)
+
+info.update(
+    {
+        "CFBundleDevelopmentRegion": "$(DEVELOPMENT_LANGUAGE)",
+        "CFBundleDisplayName": "Hitomi Downloader",
+        "CFBundleExecutable": "$(EXECUTABLE_NAME)",
+        "CFBundleIdentifier": "$(PRODUCT_BUNDLE_IDENTIFIER)",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "$(PRODUCT_NAME)",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "LSRequiresIPhoneOS": True,
+        "LSSupportsOpeningDocumentsInPlace": True,
+        "UILaunchScreen": {},
+        "UISupportedInterfaceOrientations": [
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        ],
+    }
+)
+
+with info_plist.open("wb") as stream:
+    plistlib.dump(info, stream, fmt=plistlib.FMT_XML, sort_keys=False)
 
 # Xcode 16.4 ships Swift 6.1. The source package was authored with the 6.2
 # manifest version, but it doesn't use manifest APIs that require 6.2.
