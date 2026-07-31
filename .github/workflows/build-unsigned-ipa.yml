@@ -23,6 +23,7 @@ jobs:
         run: |
           python3 bootstrap_source.py
           cp Overrides/fetch_hitomi_payload.sh Scripts/fetch_hitomi_payload.sh
+          cp Overrides/fetch_python38_runtime.sh Scripts/fetch_python38_runtime.sh
           chmod +x Scripts/*.sh
 
       - name: Select Xcode
