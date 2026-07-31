@@ -1,0 +1,13 @@
+name: Original source v1.0.1 build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo original-source-dispatch-ok
