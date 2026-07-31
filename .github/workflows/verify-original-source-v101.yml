@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   verify:
@@ -16,19 +16,22 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Find matching push build
+      - name: Dispatch macOS build
+        run: gh workflow run build-original-source-v101.yml --repo "$REPO" --ref v1.0.1-original-source
+
+      - name: Find dispatched run
         id: run
         run: |
           for attempt in $(seq 1 60); do
-            RUN_ID=$(gh run list --repo "$REPO" --workflow build-original-source-v101.yml --branch v1.0.1-original-source --event push --limit 1 --json databaseId,headSha,status --jq '.[0].databaseId // empty')
+            RUN_ID=$(gh run list --repo "$REPO" --workflow build-original-source-v101.yml --branch v1.0.1-original-source --event workflow_dispatch --limit 1 --json databaseId,status --jq '.[0].databaseId // empty')
             if [ -n "$RUN_ID" ]; then
               echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-              echo "Push build: $RUN_ID"
+              echo "Dispatched run: $RUN_ID"
               exit 0
             fi
             sleep 2
           done
-          echo "Could not find original-source push build" >&2
+          echo "Could not find dispatched run" >&2
           gh run list --repo "$REPO" --limit 20 || true
           exit 1
 
