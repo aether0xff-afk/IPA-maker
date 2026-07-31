@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 from pathlib import Path
+import plistlib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
@@ -29,8 +30,6 @@ with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         raise SystemExit(f"Corrupt base source member: {bad}")
     archive.extractall(ROOT)
 
-# The v1.0 overlay contains the full-runtime implementation while retaining
-# the already verified v0.x source bundle as the compact repository base.
 overlay_path = ROOT / "bundle/v1_overlay.b64"
 overlay_encoded = "".join(overlay_path.read_text(encoding="ascii").split())
 overlay_payload = base64.b64decode(overlay_encoded)
@@ -45,6 +44,41 @@ with zipfile.ZipFile(io.BytesIO(overlay_payload)) as archive:
     if bad:
         raise SystemExit(f"Corrupt v1 overlay member: {bad}")
     archive.extractall(ROOT)
+
+# Sideloading tools need the standard application bundle keys even though
+# Xcode can compile a custom plist without them.
+info_plist = ROOT / "Info.plist"
+with info_plist.open("rb") as stream:
+    info = plistlib.load(stream)
+info.update(
+    {
+        "CFBundleDevelopmentRegion": "$(DEVELOPMENT_LANGUAGE)",
+        "CFBundleDisplayName": "Hitomi Swift Full",
+        "CFBundleExecutable": "$(EXECUTABLE_NAME)",
+        "CFBundleIdentifier": "$(PRODUCT_BUNDLE_IDENTIFIER)",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "$(PRODUCT_NAME)",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleVersion": "100",
+        "LSRequiresIPhoneOS": True,
+        "LSSupportsOpeningDocumentsInPlace": True,
+        "UILaunchScreen": {},
+        "UISupportedInterfaceOrientations": [
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        ],
+    }
+)
+with info_plist.open("wb") as stream:
+    plistlib.dump(info, stream, fmt=plistlib.FMT_XML, sort_keys=False)
 
 for script in (ROOT / "Scripts").glob("*.sh"):
     script.chmod(0o755)
