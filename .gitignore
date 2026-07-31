@@ -1,0 +1,17 @@
+# Xcode
+DerivedData/
+build/
+build-unsigned/
+*.xcuserstate
+xcuserdata/
+HitomiSwiftFull.xcodeproj/
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Optional local binary frameworks
+Vendor/*.xcframework
+
+# macOS
+.DS_Store
